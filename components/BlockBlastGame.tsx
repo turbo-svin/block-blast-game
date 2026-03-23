@@ -1,64 +1,83 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
-// Размеры игрового поля
+// Размер поля
 const GRID_SIZE = 8;
 const TARGET_SCORE = 500;
 const TIME_LIMIT = 60;
 
-// Типы фигур (какие фигуры будут появляться)
+// Типы фигур
 type Shape = number[][];
 
-// Все возможные фигуры
+// Коллекция фигур
 const SHAPES: Shape[] = [
   // Квадрат 2x2
   [[1, 1], [1, 1]],
-  // Линия 3x1
+  // Линия 3x1 горизонтальная
+  [[1, 1, 1]],
+  // Линия 3x1 вертикальная
   [[1], [1], [1]],
-  // Г-образная фигура
+  // Г-образная
   [[1, 0], [1, 0], [1, 1]],
-  // Обратная Г-образная
+  // Г-образная зеркальная
   [[0, 1], [0, 1], [1, 1]],
   // Зигзаг
   [[1, 1, 0], [0, 1, 1]],
   // Т-образная
   [[0, 1, 0], [1, 1, 1]],
-  // Квадрат 3x3 (большая фигура для бонуса)
-  [[1, 1, 1], [1, 1, 1], [1, 1, 1]]
+  // Маленькая линия 2x1
+  [[1, 1]],
+  // Уголок 2x2 с одной пустой
+  [[1, 0], [1, 1]],
 ];
+
+// Позиция фигуры при перетаскивании
+interface DragPosition {
+  shape: Shape;
+  shapeIndex: number;
+  startX: number;
+  startY: number;
+  previewRow: number;
+  previewCol: number;
+}
 
 export default function BlockBlastGame() {
   // Состояния игры
   const [grid, setGrid] = useState<number[][]>([]);
-  const [currentShapes, setCurrentShapes] = useState<Shape[]>([]);
+  const [shapes, setShapes] = useState<Shape[]>([]);
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(TIME_LIMIT);
-  const [gameStatus, setGameStatus] = useState<'start' | 'playing' | 'won' | 'lost'>('start');
+  const [gameStatus, setGameStatus] = useState<'menu' | 'playing' | 'won' | 'lost'>('menu');
   const [betAmount, setBetAmount] = useState(100);
   const [coins, setCoins] = useState(1000);
   
-  // Refs для drag and drop
-  const [draggedShape, setDraggedShape] = useState<Shape | null>(null);
-  const [dragIndex, setDragIndex] = useState<number>(-1);
-  
-  // Инициализация игрового поля
-  const resetGrid = () => {
+  // Drag and drop
+  const [dragging, setDragging] = useState<DragPosition | null>(null);
+  const [previewCells, setPreviewCells] = useState<{row: number, col: number}[]>([]);
+
+  // Инициализация
+  useEffect(() => {
+    resetGame();
+  }, []);
+
+  const resetGame = () => {
     const emptyGrid = Array(GRID_SIZE).fill(0).map(() => Array(GRID_SIZE).fill(0));
     setGrid(emptyGrid);
+    generateNewShapes();
+    setScore(0);
+    setTimeLeft(TIME_LIMIT);
   };
-  
-  // Генерация 3 случайных фигур
-  const generateShapes = () => {
+
+  const generateNewShapes = () => {
     const newShapes: Shape[] = [];
     for (let i = 0; i < 3; i++) {
       const randomShape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
-      // Клонируем фигуру
       newShapes.push(randomShape.map(row => [...row]));
     }
-    setCurrentShapes(newShapes);
+    setShapes(newShapes);
   };
-  
+
   // Таймер
   useEffect(() => {
     if (gameStatus !== 'playing') return;
@@ -78,21 +97,21 @@ export default function BlockBlastGame() {
     
     return () => clearInterval(timer);
   }, [gameStatus, score]);
-  
+
   // Проверка победы
   useEffect(() => {
     if (gameStatus === 'playing' && score >= TARGET_SCORE) {
       setGameStatus('won');
     }
   }, [score, gameStatus]);
-  
+
   // Проверка, можно ли поставить фигуру
-  const canPlaceShape = (shape: Shape, startRow: number, startCol: number): boolean => {
+  const canPlace = (shape: Shape, row: number, col: number): boolean => {
     for (let r = 0; r < shape.length; r++) {
       for (let c = 0; c < shape[0].length; c++) {
         if (shape[r][c] === 1) {
-          const gridRow = startRow + r;
-          const gridCol = startCol + c;
+          const gridRow = row + r;
+          const gridCol = col + c;
           
           if (gridRow >= GRID_SIZE || gridCol >= GRID_SIZE) {
             return false;
@@ -106,398 +125,559 @@ export default function BlockBlastGame() {
     }
     return true;
   };
-  
-  // Постановка фигуры
-  const placeShape = (shape: Shape, startRow: number, startCol: number, shapeIndex: number) => {
-    if (gameStatus !== 'playing') return false;
-    
-    if (!canPlaceShape(shape, startRow, startCol)) {
-      return false;
-    }
-    
-    const newGrid = grid.map(row => [...row]);
-    
+
+  // Получить клетки для превью
+  const getPreviewCells = (shape: Shape, row: number, col: number): {row: number, col: number}[] => {
+    const cells: {row: number, col: number}[] = [];
     for (let r = 0; r < shape.length; r++) {
       for (let c = 0; c < shape[0].length; c++) {
         if (shape[r][c] === 1) {
-          newGrid[startRow + r][startCol + c] = 1;
+          cells.push({ row: row + r, col: col + c });
         }
       }
     }
-    
-    // Проверяем заполненные линии
-    const linesToClear: { type: 'row' | 'col', index: number }[] = [];
-    
-    for (let row = 0; row < GRID_SIZE; row++) {
-      if (newGrid[row].every(cell => cell === 1)) {
-        linesToClear.push({ type: 'row', index: row });
+    return cells;
+  };
+
+  // Поставить фигуру
+  const placeShape = (shape: Shape, shapeIndex: number, row: number, col: number) => {
+    if (gameStatus !== 'playing') return false;
+    if (!canPlace(shape, row, col)) return false;
+
+    // Ставим фигуру
+    const newGrid = grid.map(r => [...r]);
+    for (let r = 0; r < shape.length; r++) {
+      for (let c = 0; c < shape[0].length; c++) {
+        if (shape[r][c] === 1) {
+          newGrid[row + r][col + c] = 1;
+        }
       }
     }
-    
-    for (let col = 0; col < GRID_SIZE; col++) {
+
+    // Находим заполненные линии
+    const rowsToClear: number[] = [];
+    const colsToClear: number[] = [];
+
+    // Проверка строк
+    for (let i = 0; i < GRID_SIZE; i++) {
+      if (newGrid[i].every(cell => cell === 1)) {
+        rowsToClear.push(i);
+      }
+    }
+
+    // Проверка столбцов
+    for (let j = 0; j < GRID_SIZE; j++) {
       let full = true;
-      for (let row = 0; row < GRID_SIZE; row++) {
-        if (newGrid[row][col] !== 1) {
+      for (let i = 0; i < GRID_SIZE; i++) {
+        if (newGrid[i][j] !== 1) {
           full = false;
           break;
         }
       }
       if (full) {
-        linesToClear.push({ type: 'col', index: col });
+        colsToClear.push(j);
       }
     }
-    
+
+    // Очищаем линии
+    const finalGrid = newGrid.map(r => [...r]);
     let pointsEarned = 0;
-    const finalGrid = newGrid.map(row => [...row]);
-    
-    linesToClear.forEach(line => {
-      if (line.type === 'row') {
-        for (let c = 0; c < GRID_SIZE; c++) {
-          finalGrid[line.index][c] = 0;
-        }
-        pointsEarned += 100;
-      } else {
-        for (let r = 0; r < GRID_SIZE; r++) {
-          finalGrid[r][line.index] = 0;
-        }
-        pointsEarned += 100;
+
+    rowsToClear.forEach(row => {
+      for (let c = 0; c < GRID_SIZE; c++) {
+        finalGrid[row][c] = 0;
       }
+      pointsEarned += 100;
     });
-    
-    if (linesToClear.length >= 2) {
-      pointsEarned += linesToClear.length * 50;
+
+    colsToClear.forEach(col => {
+      for (let r = 0; r < GRID_SIZE; r++) {
+        finalGrid[r][col] = 0;
+      }
+      pointsEarned += 100;
+    });
+
+    // Бонус за несколько линий
+    const totalLines = rowsToClear.length + colsToClear.length;
+    if (totalLines >= 2) {
+      pointsEarned += totalLines * 50;
     }
-    
+
     setGrid(finalGrid);
     setScore(prev => prev + pointsEarned);
-    
-    const newShapes = [...currentShapes];
-    newShapes[shapeIndex] = SHAPES[Math.floor(Math.random() * SHAPES.length)].map(row => [...row]);
-    setCurrentShapes(newShapes);
-    
-    const hasValidMove = checkAnyValidMove(finalGrid, newShapes);
-    if (!hasValidMove) {
+
+    // Обновляем фигуры
+    const newShapes = [...shapes];
+    const randomShape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    newShapes[shapeIndex] = randomShape.map(row => [...row]);
+    setShapes(newShapes);
+
+    // Проверка на возможность хода
+    if (!hasAnyMove(finalGrid, newShapes)) {
       setGameStatus('lost');
     }
-    
+
     return true;
   };
-  
-  const checkAnyValidMove = (gridToCheck: number[][], shapesToCheck: Shape[]): boolean => {
-    for (const shape of shapesToCheck) {
+
+  // Проверка, есть ли возможный ход
+  const hasAnyMove = (currentGrid: number[][], currentShapes: Shape[]): boolean => {
+    for (const shape of currentShapes) {
       for (let row = 0; row <= GRID_SIZE - shape.length; row++) {
         for (let col = 0; col <= GRID_SIZE - shape[0].length; col++) {
-          let canPlace = true;
-          for (let r = 0; r < shape.length && canPlace; r++) {
+          let valid = true;
+          for (let r = 0; r < shape.length && valid; r++) {
             for (let c = 0; c < shape[0].length; c++) {
-              if (shape[r][c] === 1 && gridToCheck[row + r][col + c] === 1) {
-                canPlace = false;
+              if (shape[r][c] === 1 && currentGrid[row + r][col + c] === 1) {
+                valid = false;
                 break;
               }
             }
           }
-          if (canPlace) return true;
+          if (valid) return true;
         }
       }
     }
     return false;
   };
-  
-  const handleDragStart = (shape: Shape, index: number) => {
-    if (gameStatus !== 'playing') return;
-    setDraggedShape(shape);
-    setDragIndex(index);
-  };
-  
-  const handleDrop = (row: number, col: number) => {
-    if (draggedShape && dragIndex >= 0) {
-      let placed = false;
-      for (let startRow = 0; startRow <= GRID_SIZE - draggedShape.length; startRow++) {
-        for (let startCol = 0; startCol <= GRID_SIZE - draggedShape[0].length; startCol++) {
-          if (canPlaceShape(draggedShape, startRow, startCol)) {
-            placeShape(draggedShape, startRow, startCol, dragIndex);
-            placed = true;
-            break;
-          }
-        }
-        if (placed) break;
-      }
-    }
-    setDraggedShape(null);
-    setDragIndex(-1);
-  };
-  
-  // НАЧАТЬ ИГРУ
+
+  // Начать игру
   const startGame = () => {
     if (coins < betAmount) {
-      alert('Недостаточно монет!');
+      alert('❌ Недостаточно монет!');
       return;
     }
-    
     setCoins(prev => prev - betAmount);
-    resetGrid();
-    generateShapes();
-    setScore(0);
-    setTimeLeft(TIME_LIMIT);
     setGameStatus('playing');
+    resetGame();
   };
-  
+
+  // Обработчики drag and drop
+  const handleDragStart = (e: React.DragEvent, shape: Shape, index: number) => {
+    if (gameStatus !== 'playing') return;
+    
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    setDragging({
+      shape,
+      shapeIndex: index,
+      startX: e.clientX - rect.left,
+      startY: e.clientY - rect.top,
+      previewRow: -1,
+      previewCol: -1,
+    });
+    
+    e.dataTransfer.setData('text/plain', '');
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, row: number, col: number) => {
+    if (!dragging) return;
+    e.preventDefault();
+    
+    // Вычисляем позицию для предпросмотра
+    let previewRow = row;
+    let previewCol = col;
+    
+    // Корректируем, чтобы фигура не выходила за границы
+    if (previewRow + dragging.shape.length > GRID_SIZE) {
+      previewRow = GRID_SIZE - dragging.shape.length;
+    }
+    if (previewCol + dragging.shape[0].length > GRID_SIZE) {
+      previewCol = GRID_SIZE - dragging.shape[0].length;
+    }
+    if (previewRow < 0) previewRow = 0;
+    if (previewCol < 0) previewCol = 0;
+    
+    setDragging(prev => prev ? {
+      ...prev,
+      previewRow,
+      previewCol
+    } : null);
+    
+    const cells = getPreviewCells(dragging.shape, previewRow, previewCol);
+    setPreviewCells(cells);
+  };
+
+  const handleDragLeave = () => {
+    setPreviewCells([]);
+  };
+
+  const handleDrop = (e: React.DragEvent, row: number, col: number) => {
+    e.preventDefault();
+    
+    if (!dragging) return;
+    
+    let targetRow = row;
+    let targetCol = col;
+    
+    // Корректируем позицию
+    if (targetRow + dragging.shape.length > GRID_SIZE) {
+      targetRow = GRID_SIZE - dragging.shape.length;
+    }
+    if (targetCol + dragging.shape[0].length > GRID_SIZE) {
+      targetCol = GRID_SIZE - dragging.shape[0].length;
+    }
+    if (targetRow < 0) targetRow = 0;
+    if (targetCol < 0) targetCol = 0;
+    
+    placeShape(dragging.shape, dragging.shapeIndex, targetRow, targetCol);
+    
+    setDragging(null);
+    setPreviewCells([]);
+  };
+
+  const handleDragEnd = () => {
+    setDragging(null);
+    setPreviewCells([]);
+  };
+
+  // Рендер сетки
   const renderGrid = () => {
     const cells = [];
-    for (let i = 0; i < GRID_SIZE; i++) {
-      for (let j = 0; j < GRID_SIZE; j++) {
+    for (let row = 0; row < GRID_SIZE; row++) {
+      for (let col = 0; col < GRID_SIZE; col++) {
+        const isPreview = previewCells.some(cell => cell.row === row && cell.col === col);
+        const isFilled = grid[row][col] === 1;
+        
         cells.push(
           <div
-            key={`${i}-${j}`}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => handleDrop(i, j)}
+            key={`${row}-${col}`}
+            onDragOver={(e) => handleDragOver(e, row, col)}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, row, col)}
             style={{
-              width: '40px',
-              height: '40px',
-              border: '1px solid #333',
-              backgroundColor: grid[i][j] === 1 ? '#4CAF50' : '#1a1a2e',
-              display: 'inline-block',
-              cursor: 'pointer'
+              width: '100%',
+              aspectRatio: '1 / 1',
+              backgroundColor: isPreview ? '#4caf50' : (isFilled ? '#2e7d32' : '#1e1e2e'),
+              border: '1px solid #2d2d3a',
+              borderRadius: '6px',
+              transition: 'all 0.1s ease',
+              cursor: dragging ? 'copy' : 'default',
             }}
           />
         );
       }
     }
-    return <div style={{ width: 'fit-content', margin: '0 auto' }}>{cells}</div>;
+    
+    return (
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${GRID_SIZE}, 1fr)`,
+        gap: '4px',
+        backgroundColor: '#0a0a0f',
+        padding: '16px',
+        borderRadius: '20px',
+        maxWidth: '500px',
+        margin: '0 auto'
+      }}>
+        {cells}
+      </div>
+    );
   };
-  
+
+  // Рендер фигур
   const renderShapes = () => {
-    return currentShapes.map((shape, idx) => (
+    return shapes.map((shape, idx) => (
       <div
         key={idx}
         draggable={gameStatus === 'playing'}
-        onDragStart={() => handleDragStart(shape, idx)}
+        onDragStart={(e) => handleDragStart(e, shape, idx)}
+        onDragEnd={handleDragEnd}
         style={{
-          display: 'inline-block',
-          margin: '10px',
-          padding: '10px',
-          backgroundColor: '#2a2a3e',
-          borderRadius: '8px',
-          cursor: 'pointer'
+          backgroundColor: '#2a2a35',
+          borderRadius: '16px',
+          padding: '16px',
+          display: 'inline-flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '8px',
+          cursor: gameStatus === 'playing' ? 'grab' : 'default',
+          transition: 'transform 0.1s',
+          minWidth: '100px',
         }}
       >
-        {shape.map((row, i) => (
-          <div key={i} style={{ display: 'flex' }}>
-            {row.map((cell, j) => (
-              <div
-                key={j}
-                style={{
-                  width: '35px',
-                  height: '35px',
-                  backgroundColor: cell === 1 ? '#FF5722' : 'transparent',
-                  border: cell === 1 ? '1px solid #fff' : 'none'
-                }}
-              />
-            ))}
-          </div>
-        ))}
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px',
+        }}>
+          {shape.map((row, i) => (
+            <div key={i} style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+              {row.map((cell, j) => (
+                <div
+                  key={j}
+                  style={{
+                    width: '35px',
+                    height: '35px',
+                    backgroundColor: cell === 1 ? '#ff9800' : 'transparent',
+                    borderRadius: '8px',
+                    boxShadow: cell === 1 ? '0 2px 8px rgba(255,152,0,0.4)' : 'none',
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+        <span style={{ fontSize: '12px', color: '#888' }}>Перетащи</span>
       </div>
     ));
   };
-  
-  // ========== ЭКРАН СТАРТА (КНОПКА ИГРАТЬ) ==========
-  if (gameStatus === 'start') {
+
+  // ЭКРАН МЕНЮ
+  if (gameStatus === 'menu') {
     return (
       <div style={{
         minHeight: '100vh',
-        backgroundColor: '#0a0a1a',
-        color: '#fff',
+        background: 'linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        textAlign: 'center',
-        padding: '20px'
+        padding: '24px',
       }}>
-        <h1 style={{ fontSize: '48px', marginBottom: '20px', color: '#FF5722' }}>
-          🧩 BLOCK BLAST
-        </h1>
-        <p style={{ fontSize: '18px', marginBottom: '30px', color: '#aaa' }}>
-          Соединяй фигуры, заполняй линии и выигрывай!
-        </p>
-        
         <div style={{
-          backgroundColor: '#1a1a2e',
-          padding: '30px',
-          borderRadius: '20px',
-          marginBottom: '30px'
+          backgroundColor: 'rgba(255,255,255,0.05)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '48px',
+          padding: '48px 32px',
+          textAlign: 'center',
+          maxWidth: '400px',
+          width: '100%',
         }}>
-          <div style={{ fontSize: '24px', marginBottom: '15px' }}>💰 Твой баланс</div>
-          <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#FFD700' }}>
-            {coins} монет
-          </div>
-        </div>
-        
-        <div style={{ marginBottom: '30px' }}>
-          <div style={{ fontSize: '18px', marginBottom: '10px' }}>Выбери ставку:</div>
-          <div style={{ display: 'flex', gap: '15px', justifyContent: 'center' }}>
-            {[50, 100, 250, 500].map(amount => (
-              <button
-                key={amount}
-                onClick={() => setBetAmount(amount)}
-                style={{
-                  padding: '10px 20px',
-                  fontSize: '16px',
-                  backgroundColor: betAmount === amount ? '#FF5722' : '#2a2a3e',
-                  border: 'none',
-                  borderRadius: '10px',
-                  color: '#fff',
-                  cursor: 'pointer'
-                }}
-              >
-                {amount}
-              </button>
-            ))}
-          </div>
-        </div>
-        
-        <button
-          onClick={startGame}
-          style={{
-            padding: '18px 50px',
-            fontSize: '24px',
+          <h1 style={{
+            fontSize: '56px',
             fontWeight: 'bold',
-            backgroundColor: '#4CAF50',
-            border: 'none',
-            borderRadius: '50px',
-            color: 'white',
-            cursor: 'pointer',
-            boxShadow: '0 5px 20px rgba(76, 175, 80, 0.4)'
-          }}
-        >
-          🎮 ИГРАТЬ
-        </button>
-        
-        <p style={{ marginTop: '40px', fontSize: '14px', color: '#666' }}>
-          Заполни 500 очков за 60 секунд и умножь ставку x2!
-        </p>
+            background: 'linear-gradient(135deg, #ff9800, #ff5722)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            marginBottom: '16px',
+          }}>
+            BLOCK BLAST
+          </h1>
+          <p style={{ color: '#aaa', marginBottom: '32px' }}>
+            Перетаскивай фигуры на поле<br/>
+            Заполняй линии и выигрывай!
+          </p>
+          
+          <div style={{
+            backgroundColor: '#1e1e2e',
+            borderRadius: '24px',
+            padding: '24px',
+            marginBottom: '24px',
+          }}>
+            <div style={{ fontSize: '14px', color: '#888', marginBottom: '8px' }}>Твой баланс</div>
+            <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#ffd700' }}>
+              {coins} 🪙
+            </div>
+          </div>
+          
+          <div style={{ marginBottom: '32px' }}>
+            <div style={{ fontSize: '14px', color: '#888', marginBottom: '12px' }}>Выбери ставку</div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              {[50, 100, 250, 500].map(amount => (
+                <button
+                  key={amount}
+                  onClick={() => setBetAmount(amount)}
+                  style={{
+                    padding: '12px 24px',
+                    fontSize: '18px',
+                    fontWeight: 'bold',
+                    backgroundColor: betAmount === amount ? '#ff9800' : '#2a2a35',
+                    border: 'none',
+                    borderRadius: '40px',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {amount}
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          <button
+            onClick={startGame}
+            style={{
+              width: '100%',
+              padding: '18px',
+              fontSize: '24px',
+              fontWeight: 'bold',
+              background: 'linear-gradient(135deg, #ff9800, #ff5722)',
+              border: 'none',
+              borderRadius: '40px',
+              color: '#fff',
+              cursor: 'pointer',
+              transition: 'transform 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+          >
+            🎮 ИГРАТЬ
+          </button>
+          
+          <div style={{ marginTop: '24px', fontSize: '12px', color: '#555' }}>
+            Цель: {TARGET_SCORE} очков за {TIME_LIMIT} сек | Выигрыш: x2
+          </div>
+        </div>
       </div>
     );
   }
-  
-  // ========== ЭКРАН ПОБЕДЫ ==========
+
+  // ЭКРАН ПОБЕДЫ
   if (gameStatus === 'won') {
     return (
       <div style={{
         minHeight: '100vh',
-        backgroundColor: '#0a0a1a',
-        color: '#fff',
+        background: 'linear-gradient(135deg, #0a2e1a 0%, #1a4a2e 100%)',
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        textAlign: 'center',
-        padding: '20px'
+        padding: '24px',
       }}>
-        <h1 style={{ fontSize: '48px', color: '#4CAF50' }}>🎉 ПОБЕДА! 🎉</h1>
-        <p style={{ fontSize: '24px', margin: '20px 0' }}>
-          Ты набрал {score} очков!
-        </p>
-        <p style={{ fontSize: '32px', fontWeight: 'bold', color: '#FFD700' }}>
-          +{betAmount * 2} монет
-        </p>
-        <button
-          onClick={() => {
-            setCoins(prev => prev + betAmount * 2);
-            setGameStatus('start');
-          }}
-          style={{
-            padding: '15px 40px',
-            fontSize: '18px',
-            backgroundColor: '#4CAF50',
-            border: 'none',
-            borderRadius: '12px',
-            color: 'white',
-            cursor: 'pointer',
-            marginTop: '30px'
-          }}
-        >
-          🔄 ИГРАТЬ СНОВА
-        </button>
+        <div style={{
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '48px',
+          padding: '48px',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '16px' }}>🎉</div>
+          <h1 style={{ fontSize: '48px', color: '#ffd700', marginBottom: '16px' }}>ПОБЕДА!</h1>
+          <p style={{ fontSize: '24px', marginBottom: '8px' }}>Ты набрал {score} очков</p>
+          <p style={{ fontSize: '32px', fontWeight: 'bold', color: '#ff9800', marginBottom: '32px' }}>
+            +{betAmount * 2} 🪙
+          </p>
+          <button
+            onClick={() => {
+              setCoins(prev => prev + betAmount * 2);
+              setGameStatus('menu');
+            }}
+            style={{
+              padding: '16px 48px',
+              fontSize: '20px',
+              fontWeight: 'bold',
+              background: '#ff9800',
+              border: 'none',
+              borderRadius: '40px',
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            ИГРАТЬ СНОВА
+          </button>
+        </div>
       </div>
     );
   }
-  
-  // ========== ЭКРАН ПОРАЖЕНИЯ ==========
+
+  // ЭКРАН ПОРАЖЕНИЯ
   if (gameStatus === 'lost') {
     return (
       <div style={{
         minHeight: '100vh',
-        backgroundColor: '#0a0a1a',
-        color: '#fff',
+        background: 'linear-gradient(135deg, #2a0a1a 0%, #4a1a2e 100%)',
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        textAlign: 'center',
-        padding: '20px'
+        padding: '24px',
       }}>
-        <h1 style={{ fontSize: '48px', color: '#f44336' }}>💀 ПОРАЖЕНИЕ 💀</h1>
-        <p style={{ fontSize: '24px', margin: '20px 0' }}>
-          Ты набрал {score} из {TARGET_SCORE} очков
-        </p>
-        <p style={{ fontSize: '18px', color: '#aaa' }}>
-          Ставка {betAmount} монет сгорела
-        </p>
-        <button
-          onClick={() => setGameStatus('start')}
-          style={{
-            padding: '15px 40px',
-            fontSize: '18px',
-            backgroundColor: '#2196F3',
-            border: 'none',
-            borderRadius: '12px',
-            color: 'white',
-            cursor: 'pointer',
-            marginTop: '30px'
-          }}
-        >
-          🔄 ПОПРОБОВАТЬ СНОВА
-        </button>
+        <div style={{
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '48px',
+          padding: '48px',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '16px' }}>💀</div>
+          <h1 style={{ fontSize: '48px', color: '#f44336', marginBottom: '16px' }}>ПОРАЖЕНИЕ</h1>
+          <p style={{ fontSize: '24px', marginBottom: '8px' }}>Ты набрал {score} из {TARGET_SCORE}</p>
+          <p style={{ fontSize: '18px', color: '#aaa', marginBottom: '32px' }}>
+            Ставка {betAmount} 🪙 сгорела
+          </p>
+          <button
+            onClick={() => setGameStatus('menu')}
+            style={{
+              padding: '16px 48px',
+              fontSize: '20px',
+              fontWeight: 'bold',
+              background: '#f44336',
+              border: 'none',
+              borderRadius: '40px',
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            ПОПРОБОВАТЬ СНОВА
+          </button>
+        </div>
       </div>
     );
   }
-  
-  // ========== ИГРОВОЙ ЭКРАН ==========
+
+  // ИГРОВОЙ ЭКРАН
   return (
     <div style={{
       minHeight: '100vh',
-      backgroundColor: '#0a0a1a',
-      color: '#fff',
-      textAlign: 'center',
-      padding: '20px'
+      background: '#0f0f1a',
+      padding: '20px',
     }}>
       {/* Верхняя панель */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
-        padding: '15px',
-        backgroundColor: '#1a1a2e',
-        borderRadius: '12px',
-        marginBottom: '20px'
+        alignItems: 'center',
+        backgroundColor: '#1e1e2e',
+        borderRadius: '24px',
+        padding: '16px 24px',
+        marginBottom: '24px',
+        flexWrap: 'wrap',
+        gap: '12px',
       }}>
-        <div>💰 Монет: {coins}</div>
-        <div>⭐ Счёт: {score}/{TARGET_SCORE}</div>
-        <div>⏱️ Время: {timeLeft} сек</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '24px' }}>💰</span>
+          <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#ffd700' }}>{coins}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '24px' }}>⭐</span>
+          <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#ff9800' }}>
+            {score}/{TARGET_SCORE}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '24px' }}>⏱️</span>
+          <span style={{ fontSize: '24px', fontWeight: 'bold', color: timeLeft < 10 ? '#f44336' : '#fff' }}>
+            {timeLeft} сек
+          </span>
+        </div>
       </div>
-      
+
       {/* Игровое поле */}
-      <div style={{ marginBottom: '20px' }}>
-        {renderGrid()}
+      {renderGrid()}
+
+      {/* Фигуры */}
+      <div style={{ marginTop: '32px' }}>
+        <h3 style={{ textAlign: 'center', color: '#fff', marginBottom: '20px', fontSize: '18px', fontWeight: 'normal' }}>
+          Перетащи фигуру на поле 👇
+        </h3>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          gap: '20px',
+          flexWrap: 'wrap',
+        }}>
+          {renderShapes()}
+        </div>
       </div>
-      
-      <div>
-        <h3>Перетащи фигуру на поле:</h3>
-        <div>{renderShapes()}</div>
-      </div>
-      
-      <div style={{ marginTop: '20px', fontSize: '14px', color: '#888' }}>
-        💡 Заполняй целые строки или столбцы, чтобы получить очки!
+
+      {/* Подсказка */}
+      <div style={{
+        textAlign: 'center',
+        marginTop: '32px',
+        fontSize: '14px',
+        color: '#666',
+      }}>
+        💡 Заполни целую строку или столбец — получишь очки!
       </div>
     </div>
   );
